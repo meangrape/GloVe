@@ -30,9 +30,9 @@ def main():
     W_norm = np.zeros(W.shape)
     d = (np.sum(W ** 2, 1) ** (0.5))
     W_norm = (W.T / d).T
-    evaluate_vectors(W_norm, vocab, ivocab)
+    evaluate_vectors(W_norm, vocab)
 
-def evaluate_vectors(W, vocab, ivocab):
+def evaluate_vectors(W, vocab):
     """Evaluate the trained word vectors on a variety of tasks"""
 
     filenames = [
@@ -61,6 +61,11 @@ def evaluate_vectors(W, vocab, ivocab):
             full_data = [line.rstrip().split(' ') for line in f]
             full_count += len(full_data)
             data = [x for x in full_data if all(word in vocab for word in x)]
+
+        if len(data) == 0:
+            print("ERROR: no lines of vocab kept for %s !" % filenames[i])
+            print("Example missing line:", full_data[0])
+            continue
 
         indices = np.array([[vocab[word] for word in row] for row in data])
         ind1, ind2, ind3, ind4 = indices.T

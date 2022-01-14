@@ -19,39 +19,24 @@
 //
 //  For more information, bug reports, fixes, contact:
 //    Jeffrey Pennington (jpennin@stanford.edu)
+//    Christopher Manning (manning@cs.stanford.edu)
+//    https://github.com/stanfordnlp/GloVe/
 //    GlobalVectors@googlegroups.com
 //    http://nlp.stanford.edu/projects/glove/
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define MAX_STRING_LENGTH 1000
-#define TSIZE	1048576
-#define SEED	1159241
-#define HASHFN  bitwisehash
+#include "common.h"
 
 typedef struct vocabulary {
     char *word;
     long long count;
 } VOCAB;
 
-typedef struct hashrec {
-    char *word;
-    long long count;
-    struct hashrec *next;
-} HASHREC;
-
 int verbose = 2; // 0, 1, or 2
 long long min_count = 1; // min occurrences for inclusion in vocab
 long long max_vocab = 0; // max_vocab = 0 for no limit
-
-
-/* Efficient string comparison */
-int scmp( char *s1, char *s2 ) {
-    while (*s1 != '\0' && *s1 == *s2) {s1++; s2++;}
-    return(*s1 - *s2);
-}
 
 
 /* Vocab frequency comparison; break ties alphabetically */
@@ -69,29 +54,9 @@ int CompareVocab(const void *a, const void *b) {
     else return 0;
 }
 
-/* Move-to-front hashing and hash function from Hugh Williams, http://www.seg.rmit.edu.au/code/zwh-ipl/ */
-
-/* Simple bitwise hash function */
-unsigned int bitwisehash(char *word, int tsize, unsigned int seed) {
-    char c;
-    unsigned int h;
-    h = seed;
-    for (; (c =* word) != '\0'; word++) h ^= ((h << 5) + c + (h >> 2));
-    return((unsigned int)((h&0x7fffffff) % tsize));
-}
-
-/* Create hash table, initialise pointers to NULL */
-HASHREC ** inithashtable() {
-    int	i;
-    HASHREC **ht;
-    ht = (HASHREC **) malloc( sizeof(HASHREC *) * TSIZE );
-    for (i = 0; i < TSIZE; i++) ht[i] = (HASHREC *) NULL;
-    return(ht);
-}
-
 /* Search hash table for given string, insert if not found */
 void hashinsert(HASHREC **ht, char *w) {
-    HASHREC	*htmp, *hprv;
+    HASHREC     *htmp, *hprv;
     unsigned int hval = HASHFN(w, TSIZE, SEED);
     
     for (hprv = NULL, htmp = ht[hval]; htmp != NULL && scmp(htmp->word, w) != 0; hprv = htmp, htmp = htmp->next);
@@ -99,7 +64,7 @@ void hashinsert(HASHREC **ht, char *w) {
         htmp = (HASHREC *) malloc( sizeof(HASHREC) );
         htmp->word = (char *) malloc( strlen(w) + 1 );
         strcpy(htmp->word, w);
-        htmp->count = 1;
+        htmp->num = 1;
         htmp->next = NULL;
         if ( hprv==NULL )
             ht[hval] = htmp;
@@ -108,7 +73,7 @@ void hashinsert(HASHREC **ht, char *w) {
     }
     else {
         /* new records are not moved to front */
-        htmp->count++;
+        htmp->num++;
         if (hprv != NULL) {
             /* move to front on access */
             hprv->next = htmp->next;
@@ -121,7 +86,7 @@ void hashinsert(HASHREC **ht, char *w) {
 
 int get_counts() {
     long long i = 0, j = 0, vocab_size = 12500;
-    char format[20];
+    // char format[20];
     char str[MAX_STRING_LENGTH + 1];
     HASHREC **vocab_hash = inithashtable();
     HASHREC *htmp;
@@ -130,10 +95,14 @@ int get_counts() {
     
     fprintf(stderr, "BUILDING VOCABULARY\n");
     if (verbose > 1) fprintf(stderr, "Processed %lld tokens.", i);
-    sprintf(format,"%%%ds",MAX_STRING_LENGTH);
-    while (fscanf(fid, format, str) != EOF) { // Insert all tokens into hashtable
+    // sprintf(format,"%%%ds",MAX_STRING_LENGTH);
+    while ( ! feof(fid)) {
+        // Insert all tokens into hashtable
+        int nl = get_word(str, fid);
+        if (nl) continue; // just a newline marker or feof
         if (strcmp(str, "<unk>") == 0) {
             fprintf(stderr, "\nError, <unk> vector found in corpus.\nPlease remove <unk>s from your corpus (e.g. cat text8 | sed -e 's/<unk>/<raw_unk>/g' > text8.new)");
+            free_table(vocab_hash);
             return 1;
         }
         hashinsert(vocab_hash, str);
@@ -145,7 +114,7 @@ int get_counts() {
         htmp = vocab_hash[i];
         while (htmp != NULL) {
             vocab[j].word = htmp->word;
-            vocab[j].count = htmp->count;
+            vocab[j].count = htmp->num;
             j++;
             if (j>=vocab_size) {
                 vocab_size += 2500;
@@ -172,26 +141,14 @@ int get_counts() {
     
     if (i == max_vocab && max_vocab < j) if (verbose > 0) fprintf(stderr, "Truncating vocabulary at size %lld.\n", max_vocab);
     fprintf(stderr, "Using vocabulary of size %lld.\n\n", i);
+    free_table(vocab_hash);
+    free(vocab);
     return 0;
 }
 
-int find_arg(char *str, int argc, char **argv) {
-    int i;
-    for (i = 1; i < argc; i++) {
-        if (!scmp(str, argv[i])) {
-            if (i == argc - 1) {
-                printf("No argument given for %s\n", str);
-                exit(1);
-            }
-            return i;
-        }
-    }
-    return -1;
-}
-
 int main(int argc, char **argv) {
-    int i;
-    if (argc == 1) {
+    if (argc == 2 &&
+        (!scmp(argv[1], "-h") || !scmp(argv[1], "-help") || !scmp(argv[1], "--help"))) {
         printf("Simple tool to extract unigram counts\n");
         printf("Author: Jeffrey Pennington (jpennin@stanford.edu)\n\n");
         printf("Usage options:\n");
@@ -205,7 +162,8 @@ int main(int argc, char **argv) {
         printf("./vocab_count -verbose 2 -max-vocab 100000 -min-count 10 < corpus.txt > vocab.txt\n");
         return 0;
     }
-    
+
+    int i;
     if ((i = find_arg((char *)"-verbose", argc, argv)) > 0) verbose = atoi(argv[i + 1]);
     if ((i = find_arg((char *)"-max-vocab", argc, argv)) > 0) max_vocab = atoll(argv[i + 1]);
     if ((i = find_arg((char *)"-min-count", argc, argv)) > 0) min_count = atoll(argv[i + 1]);

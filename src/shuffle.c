@@ -22,31 +22,19 @@
 //    http://nlp.stanford.edu/projects/glove/
 
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include "common.h"
 
-#define MAX_STRING_LENGTH 1000
 
 static const long LRAND_MAX = ((long) RAND_MAX + 2) * (long)RAND_MAX;
-typedef double real;
-
-typedef struct cooccur_rec {
-    int word1;
-    int word2;
-    real val;
-} CREC;
 
 int verbose = 2; // 0, 1, or 2
+int seed = 0;
 long long array_size = 2000000; // size of chunks to shuffle individually
 char *file_head; // temporary file string
 real memory_limit = 2.0; // soft limit, in gigabytes
-
-/* Efficient string comparison */
-int scmp( char *s1, char *s2 ) {
-    while (*s1 != '\0' && *s1 == *s2) {s1++; s2++;}
-    return(*s1 - *s2);
-}
-
 
 /* Generate uniformly distributed random long ints */
 static long rand_long(long n) {
@@ -86,12 +74,14 @@ int shuffle_merge(int num) {
     FILE **fid, *fout = stdout;
     
     array = malloc(sizeof(CREC) * array_size);
-    fid = malloc(sizeof(FILE) * num);
+    fid = calloc(num, sizeof(FILE));
     for (fidcounter = 0; fidcounter < num; fidcounter++) { //num = number of temporary files to merge
         sprintf(filename,"%s_%04d.bin",file_head, fidcounter);
         fid[fidcounter] = fopen(filename, "rb");
         if (fid[fidcounter] == NULL) {
-            fprintf(stderr, "Unable to open file %s.\n",filename);
+            log_file_loading_error("temp file", filename);
+            free(array);
+            free_fid(fid, num);
             return 1;
         }
     }
@@ -122,11 +112,17 @@ int shuffle_merge(int num) {
     }
     fprintf(stderr, "\n\n");
     free(array);
+    free(fid);
     return 0;
 }
 
 /* Shuffle large input stream by splitting into chunks */
 int shuffle_by_chunks() {
+    if (seed == 0) {
+        seed = time(0);
+    }
+    fprintf(stderr, "Using random seed %d\n", seed);
+    srand(seed);
     long i = 0, l = 0;
     int fidcounter = 0;
     char filename[MAX_STRING_LENGTH];
@@ -139,7 +135,8 @@ int shuffle_by_chunks() {
     sprintf(filename,"%s_%04d.bin",file_head, fidcounter);
     fid = fopen(filename,"w");
     if (fid == NULL) {
-        fprintf(stderr, "Unable to open file %s.\n",filename);
+        log_file_loading_error("file", filename);
+        free(array);
         return 1;
     }
     if (verbose > 1) fprintf(stderr, "Shuffling by chunks: processed 0 lines.");
@@ -155,7 +152,8 @@ int shuffle_by_chunks() {
             sprintf(filename,"%s_%04d.bin",file_head, fidcounter);
             fid = fopen(filename,"w");
             if (fid == NULL) {
-                fprintf(stderr, "Unable to open file %s.\n",filename);
+                log_file_loading_error("file", filename);
+                free(array);
                 return 1;
             }
             i = 0;
@@ -174,25 +172,11 @@ int shuffle_by_chunks() {
     return shuffle_merge(fidcounter + 1); // Merge and shuffle together temporary files
 }
 
-int find_arg(char *str, int argc, char **argv) {
-    int i;
-    for (i = 1; i < argc; i++) {
-        if (!scmp(str, argv[i])) {
-            if (i == argc - 1) {
-                printf("No argument given for %s\n", str);
-                exit(1);
-            }
-            return i;
-        }
-    }
-    return -1;
-}
-
 int main(int argc, char **argv) {
     int i;
-    file_head = malloc(sizeof(char) * MAX_STRING_LENGTH);
     
-    if (argc == 1) {
+    if (argc == 2 &&
+        (!scmp(argv[1], "-h") || !scmp(argv[1], "-help") || !scmp(argv[1], "--help"))) {
         printf("Tool to shuffle entries of word-word cooccurrence files\n");
         printf("Author: Jeffrey Pennington (jpennin@stanford.edu)\n\n");
         printf("Usage options:\n");
@@ -204,18 +188,23 @@ int main(int argc, char **argv) {
         printf("\t\tLimit to length <int> the buffer which stores chunks of data to shuffle before writing to disk. \n\t\tThis value overrides that which is automatically produced by '-memory'.\n");
         printf("\t-temp-file <file>\n");
         printf("\t\tFilename, excluding extension, for temporary files; default temp_shuffle\n");
-        
+        printf("\t-seed <int>\n");
+        printf("\t\tRandom seed to use.  If not set, will be randomized using current time.");
         printf("\nExample usage: (assuming 'cooccurrence.bin' has been produced by 'coccur')\n");
         printf("./shuffle -verbose 2 -memory 8.0 < cooccurrence.bin > cooccurrence.shuf.bin\n");
         return 0;
     }
-   
+
+    file_head = malloc(sizeof(char) * MAX_STRING_LENGTH);
     if ((i = find_arg((char *)"-verbose", argc, argv)) > 0) verbose = atoi(argv[i + 1]);
     if ((i = find_arg((char *)"-temp-file", argc, argv)) > 0) strcpy(file_head, argv[i + 1]);
     else strcpy(file_head, (char *)"temp_shuffle");
     if ((i = find_arg((char *)"-memory", argc, argv)) > 0) memory_limit = atof(argv[i + 1]);
     array_size = (long long) (0.95 * (real)memory_limit * 1073741824/(sizeof(CREC)));
     if ((i = find_arg((char *)"-array-size", argc, argv)) > 0) array_size = atoll(argv[i + 1]);
-    return shuffle_by_chunks();
+    if ((i = find_arg((char *)"-seed", argc, argv)) > 0) seed = atoi(argv[i + 1]);
+    const int returned_value = shuffle_by_chunks();
+    free(file_head);
+    return returned_value;
 }
 
